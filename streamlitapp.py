@@ -20,8 +20,8 @@ st.set_page_config(
 
 # GitHub PDF URLs (Replace with your actual URLs)
 PDF_URLS = {
-    "paper1": "https://github.com/<your-username>/<your-repo>/raw/main/An_introduction_to_genetic_algorithms.pdf",
-    "paper2": "https://github.com/<your-username>/<your-repo>/raw/main/Genetic_Algorithms.pdf"
+    "paper1": "https://github.com/MariamOsama3/genaticAlgorithemChat/blob/main/Genetic_Algorithms.pdf",
+    "paper2": "https://github.com/MariamOsama3/genaticAlgorithemChat/blob/main/An_introduction_to_genetic_algorithms.pdf"
 }
 
 # Cache expensive operations
