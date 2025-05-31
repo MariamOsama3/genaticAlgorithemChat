@@ -7,6 +7,8 @@ import os
 import pdfplumber
 from langchain_ollama.llms import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
+import requests  # Add this import
+from io import BytesIO  # Add this import
 
 # Set page config first
 st.set_page_config(
@@ -15,6 +17,12 @@ st.set_page_config(
     layout="centered",
     initial_sidebar_state="collapsed"
 )
+
+# GitHub PDF URLs (Replace with your actual URLs)
+PDF_URLS = {
+    "paper1": "https://github.com/<your-username>/<your-repo>/raw/main/An_introduction_to_genetic_algorithms.pdf",
+    "paper2": "https://github.com/<your-username>/<your-repo>/raw/main/Genetic_Algorithms.pdf"
+}
 
 # Cache expensive operations
 @st.cache_resource(show_spinner=False)
@@ -29,8 +37,8 @@ def create_vector_store(_embedding):
         embedding_function=_embedding
     )
 
-@st.cache_data(show_spinner="Processing PDFs...")
-def extract_pdf_chunks(pdf_path, source_name):
+# Modified to accept file bytes instead of file path
+def extract_pdf_chunks(pdf_bytes, source_name):
     docs = []
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=800,
@@ -38,7 +46,7 @@ def extract_pdf_chunks(pdf_path, source_name):
         length_function=len,
     )
     
-    with pdfplumber.open(pdf_path) as pdf:
+    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
         for i, page in enumerate(pdf.pages):
             text = page.extract_text()
             if text:
@@ -51,18 +59,37 @@ def extract_pdf_chunks(pdf_path, source_name):
                     ))
     return docs
 
+# New function to download PDFs
+@st.cache_data(show_spinner="Downloading research papers...")
+def download_pdf(url):
+    response = requests.get(url)
+    response.raise_for_status()  # Raise error for bad status
+    return response.content
+
 # Initialize once
 embedding = setup_embeddings()
 vector_store = create_vector_store(embedding)
 
 # Check if database needs initialization
 if not os.path.exists("./chrome_langchain_db"):
-    with st.spinner("Initializing knowledge base..."):
-        docs_pdf1 = extract_pdf_chunks("An_introduction_to_genetic_algorithms.pdf", "paper1")
-        docs_pdf2 = extract_pdf_chunks("Genetic_Algorithms.pdf", "paper2")
-        all_docs = docs_pdf1 + docs_pdf2
-        vector_store.add_documents(documents=all_docs, ids=[doc.id for doc in all_docs])
+    with st.spinner("Initializing knowledge base from GitHub..."):
+        try:
+            # Download and process PDFs
+            all_docs = []
+            for name, url in PDF_URLS.items():
+                pdf_bytes = download_pdf(url)
+                docs = extract_pdf_chunks(pdf_bytes, name)
+                all_docs.extend(docs)
+                
+            vector_store.add_documents(
+                documents=all_docs,
+                ids=[doc.id for doc in all_docs]
+            )
+        except Exception as e:
+            st.error(f"Failed to initialize database: {str(e)}")
+            st.stop()
 
+# ... rest of your code remains unchanged (retriever, UI components, chat, etc.) ...
 retriever = vector_store.as_retriever(search_kwargs={"k": 2})
 
 # UI Components
@@ -72,6 +99,9 @@ st.caption("Ask questions about genetic algorithms based on research papers")
 # Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = [{"role": "assistant", "content": "Ask me about genetic algorithms!"}]
+
+# ... rest of your original code ...
+# (Keep all your existing UI components, chat handling, and sidebar code below)
 
 # Display chat messages
 for message in st.session_state.messages:
