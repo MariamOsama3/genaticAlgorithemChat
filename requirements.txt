@@ -1,7 +1,6 @@
-pysqlite3-binary
-chromadb==0.4.24
-langchain-chroma==0.2.4
-langchain-ollama==0.3.3
-streamlit==1.45.1
-pdfplumber==0.11.0
-requests
+streamlit
+langchain
+langchain-core
+langchain-chroma
+langchain-ollama
+pdfplumber
