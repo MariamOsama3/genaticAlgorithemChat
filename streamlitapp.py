@@ -1,190 +1,95 @@
-__import__('pysqlite3')
-import sys
-sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
-
 import streamlit as st
 from langchain_ollama import OllamaEmbeddings
 from langchain_chroma import Chroma
-from langchain_core.documents import Document
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-import os
-import pdfplumber
 from langchain_ollama.llms import OllamaLLM
+from langchain_core.documents import Document
 from langchain_core.prompts import ChatPromptTemplate
-import requests
-from io import BytesIO
-# Set page config first
+import pdfplumber
+import os
+import tempfile
 
-st.set_page_config(
-    page_title="Genetic Algorithm Expert",
-    page_icon="🧬",
-    layout="centered",
-    initial_sidebar_state="collapsed"
-)
+# -- SETTINGS --
+embedding_model_name = "mxbai-embed-large"
+llm_model_name = "llama3.2"
+persist_dir = "./chroma_db"
 
-# GitHub PDF URLs (Replace with your actual URLs)
-PDF_URLS = {
-    "paper1": "https://github.com/MariamOsama3/genaticAlgorithemChat/blob/main/Genetic_Algorithms.pdf",
-    "paper2": "https://github.com/MariamOsama3/genaticAlgorithemChat/blob/main/An_introduction_to_genetic_algorithms.pdf"
-}
-
-# Cache expensive operations
-@st.cache_resource(show_spinner=False)
-def setup_embeddings():
-    return OllamaEmbeddings(model="mxbai-embed-large")
-
-@st.cache_resource(show_spinner=False)
-def create_vector_store(_embedding):
-    return Chroma(
-        collection_name="papers_pdfs",
-        persist_directory="./chrome_langchain_db",
-        embedding_function=_embedding
-    )
-
-# Modified to accept file bytes instead of file path
-def extract_pdf_chunks(pdf_bytes, source_name):
+# -- PDF Chunking --
+def extract_pdf_chunks(file_path, source_name):
     docs = []
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=800,
-        chunk_overlap=150,
-        length_function=len,
-    )
-    
-    with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+    with pdfplumber.open(file_path) as pdf:
         for i, page in enumerate(pdf.pages):
             text = page.extract_text()
-            if text:
-                chunks = text_splitter.split_text(text)
-                for j, chunk in enumerate(chunks):
-                    docs.append(Document(
-                        page_content=chunk.strip(),
-                        metadata={"source": source_name, "page": i + 1},
-                        id=f"{source_name}-{i}-{j}"
-                    ))
+            if text and len(text.strip()) > 100:  # Skip empty/short pages
+                docs.append(Document(
+                    page_content=text.strip(),
+                    metadata={"source": source_name, "page": i + 1},
+                    id=f"{source_name}-{i}"
+                ))
     return docs
 
-# New function to download PDFs
-@st.cache_data(show_spinner="Downloading research papers...")
-def download_pdf(url):
-    response = requests.get(url)
-    response.raise_for_status()  # Raise error for bad status
-    return response.content
+# -- UI Starts Here --
+st.title("📚 PDF Q&A using Ollama + LangChain")
 
-# Initialize once
-embedding = setup_embeddings()
-vector_store = create_vector_store(embedding)
+# Upload
+uploaded_files = st.file_uploader("Upload PDF(s)", type="pdf", accept_multiple_files=True)
 
-# Check if database needs initialization
-if not os.path.exists("./chrome_langchain_db"):
-    with st.spinner("Initializing knowledge base from GitHub..."):
-        try:
-            # Download and process PDFs
-            all_docs = []
-            for name, url in PDF_URLS.items():
-                pdf_bytes = download_pdf(url)
-                docs = extract_pdf_chunks(pdf_bytes, name)
-                all_docs.extend(docs)
-                
-            vector_store.add_documents(
-                documents=all_docs,
-                ids=[doc.id for doc in all_docs]
-            )
-        except Exception as e:
-            st.error(f"Failed to initialize database: {str(e)}")
-            st.stop()
+if uploaded_files:
+    all_docs = []
+    for uploaded_file in uploaded_files:
+        # Save to temp file
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(uploaded_file.read())
+            tmp_path = tmp_file.name
 
-# ... rest of your code remains unchanged (retriever, UI components, chat, etc.) ...
-retriever = vector_store.as_retriever(search_kwargs={"k": 2})
+        # Extract chunks
+        file_docs = extract_pdf_chunks(tmp_path, uploaded_file.name)
+        all_docs.extend(file_docs)
+        st.success(f"📄 Processed {len(file_docs)} pages from {uploaded_file.name}")
 
-# UI Components
-st.title("🧬 Genetic Algorithm Expert")
-st.caption("Ask questions about genetic algorithms based on research papers")
+    # Embedding
+    embedding = OllamaEmbeddings(model=embedding_model_name)
+    vector_store = Chroma(
+        collection_name="pdf_qa",
+        persist_directory=persist_dir,
+        embedding_function=embedding
+    )
 
-# Initialize chat history
-if "messages" not in st.session_state:
-    st.session_state.messages = [{"role": "assistant", "content": "Ask me about genetic algorithms!"}]
+    # Add only once
+    if not os.path.exists(persist_dir) or len(vector_store.get()["ids"]) == 0:
+        vector_store.add_documents(all_docs, ids=[doc.id for doc in all_docs])
+        st.success("✅ Embeddings created and stored.")
 
-# ... rest of your original code ...
-# (Keep all your existing UI components, chat handling, and sidebar code below)
+    retriever = vector_store.as_retriever(search_kwargs={"k": 3})
+    llm = OllamaLLM(model=llm_model_name)
 
-# Display chat messages
-for message in st.session_state.messages:
-    with st.chat_message(message["role"]):
-        st.markdown(message["content"])
+    # Prompt Template
+    template = """
+You are an expert in answering questions about genetic algorithms.
 
-# Chat input
-if prompt := st.chat_input("Your question about genetic algorithms"):
-    # Add user message to chat history
-    st.session_state.messages.append({"role": "user", "content": prompt})
-    
-    # Display user message
-    with st.chat_message("user"):
-        st.markdown(prompt)
-    
-    # Display assistant response
-    with st.chat_message("assistant"):
-        message_placeholder = st.empty()
-        full_response = ""
-        
-        with st.spinner("🔍 Searching papers..."):
-            try:
-                results = retriever.invoke(prompt)
-                paper = "\n\n".join(
-                    [f"📄 **Source: {doc.metadata['source']} (Page {doc.metadata['page']})**\n{doc.page_content}" 
-                    for doc in results]
-                )
-            except Exception as e:
-                st.error(f"Retrieval error: {str(e)}")
-                st.stop()
-        
-        
-        model = OllamaLLM(model="llama3.2", temperature=0.3)
-        template = """You are a genetic algorithm expert. Answer concisely using ONLY this context:
-        
-        Context:
-        {paper}
-        
-        Question: {question}
-        
-        If context doesn't contain answer, say "I couldn't find relevant information in the papers."
-        """
-        prompt_template = ChatPromptTemplate.from_template(template)
-        chain = prompt_template | model
-        
-        with st.spinner("💡 Generating answer..."):
-            try:
-                # Stream the response
-                for chunk in chain.stream({"paper": paper, "question": prompt}):
-                    full_response += chunk
-                    message_placeholder.markdown(full_response + "▌")
-                message_placeholder.markdown(full_response)
-            except Exception as e:
-                st.error(f"Generation error: {str(e)}")
-                full_response = "Sorry, I encountered an error processing your request."
-                message_placeholder.markdown(full_response)
-    
-    # Add assistant response to chat history
-    st.session_state.messages.append({"role": "assistant", "content": full_response})
-    
-    # Show sources
-    with st.expander("📚 Sources used"):
-        for doc in results:
-            st.caption(f"**{doc.metadata['source']}** (Page {doc.metadata['page']})")
-            st.text(doc.page_content[:300] + "...")
+Here is the content from the papers:
+{paper}
 
-# Add performance notes to sidebar
-with st.sidebar:
-    st.header("Performance Notes")
-    st.markdown("""
-    - Using efficient llama3.2 model to reduce heat
-    - Smaller text chunks (800 characters)
-    - Only 2 documents retrieved per query
-    - Database persists between sessions
-    - Heavy operations cached
-    """)
-    if st.button("Clear Chat History"):
-        st.session_state.messages = [{"role": "assistant", "content": "Ask me about genetic algorithms!"}]
-        st.experimental_rerun()
+Question:
+{question}
 
-# Add cooling recommendation
-st.sidebar.info("💡 **Laptop Cooling Tip**:\nPlace your laptop on a hard, flat surface for better airflow during extended use.")
+If the question is unrelated or cannot be answered from the papers, respond:
+"I'm sorry, I don't have enough information from the papers to answer that."
+"""
+    prompt = ChatPromptTemplate.from_template(template)
+    chain = prompt | llm
+
+    # Chat Interface
+    st.header("🔎 Ask a Question")
+    user_question = st.text_input("Enter your question")
+
+    if st.button("Get Answer") and user_question:
+        paper_docs = retriever.invoke(user_question)
+        if not paper_docs:
+            st.warning("🤷 No relevant information found in papers.")
+        else:
+            result = chain.invoke({
+                "paper": paper_docs,
+                "question": user_question
+            })
+            st.success("✅ Answer:")
+            st.write(result)
