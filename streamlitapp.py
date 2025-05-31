@@ -1,3 +1,7 @@
+__import__('pysqlite3')
+import sys
+sys.modules['sqlite3'] = sys.modules.pop('pysqlite3')
+
 import streamlit as st
 from langchain_ollama import OllamaEmbeddings
 from langchain_chroma import Chroma
@@ -7,10 +11,10 @@ import os
 import pdfplumber
 from langchain_ollama.llms import OllamaLLM
 from langchain_core.prompts import ChatPromptTemplate
-import requests  # Add this import
-from io import BytesIO  # Add this import
-
+import requests
+from io import BytesIO
 # Set page config first
+
 st.set_page_config(
     page_title="Genetic Algorithm Expert",
     page_icon="🧬",
